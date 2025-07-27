@@ -16,10 +16,10 @@ class UpdateService {
 
   static Future<void> checkForUpdates(BuildContext context) async {
     // Only check for updates in production mode
-    if (!isProduction) {
-      debugPrint('Update check skipped: Not in production mode');
-      return;
-    }
+    // if (!isProduction) {
+    //   debugPrint('Update check skipped: Not in production mode');
+    //   return;
+    // }
 
     try {
       // Get current app information
