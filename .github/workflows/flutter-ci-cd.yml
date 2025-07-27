@@ -147,10 +147,7 @@ jobs:
             build/app/outputs/flutter-apk/app-x86_64-release.apk
           body: |
             ${{ steps.version.outputs.CHANGELOG }}
-            
-            To update your app:
-            1. Download the appropriate APK for your device
-            2. Install the new version
+
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
