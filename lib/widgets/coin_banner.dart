@@ -16,8 +16,7 @@ class _CoinBannerState extends State<CoinBanner> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.red,
-      // color: Colors.blueAccent,
+      color: Colors.blueAccent,
       width: double.infinity,
       padding: EdgeInsets.all(30),
       child: Column(
