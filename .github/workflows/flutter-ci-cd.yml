@@ -1,0 +1,138 @@
+name: Flutter CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Para pegar todo histórico
+      
+      - name: Generate new version
+        id: version
+        run: |
+          # Pega a última tag
+          LAST_TAG=$(git describe --tags `git rev-list --tags --max-count=1` 2>/dev/null || echo "v0.0.0")
+          echo "Last tag: $LAST_TAG"
+          
+          # Remove o 'v' inicial e split a versão
+          VERSION=${LAST_TAG#v}
+          IFS='.' read -r -a VERSION_PARTS <<< "$VERSION"
+          
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]}
+          
+          # Pega commits desde a última tag
+          COMMITS=$(git log $LAST_TAG..HEAD --pretty=format:"%s")
+          
+          # Conta os diferentes tipos de commits
+          BREAK_COUNT=$(echo "$COMMITS" | grep -c "^break:" || true)
+          FEAT_COUNT=$(echo "$COMMITS" | grep -c "^feat:" || true)
+          FIX_COUNT=$(echo "$COMMITS" | grep -c "^fix:" || true)
+          
+          echo "Found changes since $LAST_TAG:"
+          echo "Breaking changes: $BREAK_COUNT"
+          echo "Features: $FEAT_COUNT"
+          echo "Fixes: $FIX_COUNT"
+          
+          # Incrementa versão baseado nos commits
+          if [ $BREAK_COUNT -gt 0 ]; then
+            # Major change: incrementa major, zera minor e patch
+            MAJOR=$((MAJOR + BREAK_COUNT))
+            MINOR=0
+            PATCH=0
+          elif [ $FEAT_COUNT -gt 0 ]; then
+            # Minor change: mantém major, incrementa minor, zera patch
+            MINOR=$((MINOR + FEAT_COUNT))
+            PATCH=0
+          elif [ $FIX_COUNT -gt 0 ]; then
+            # Patch change: mantém major e minor, incrementa patch
+            PATCH=$((PATCH + FIX_COUNT))
+          fi
+          
+          # Nova versão
+          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
+          echo "New version will be: $NEW_VERSION"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          
+          # Gera changelog
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          echo "Changes since $LAST_TAG:" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          if [ $BREAK_COUNT -gt 0 ]; then
+            echo "Breaking Changes:" >> $GITHUB_OUTPUT
+            echo "$COMMITS" | grep "^break:" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+          fi
+          if [ $FEAT_COUNT -gt 0 ]; then
+            echo "Features:" >> $GITHUB_OUTPUT
+            echo "$COMMITS" | grep "^feat:" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+          fi
+          if [ $FIX_COUNT -gt 0 ]; then
+            echo "Fixes:" >> $GITHUB_OUTPUT
+            echo "$COMMITS" | grep "^fix:" >> $GITHUB_OUTPUT
+          fi
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.4'
+          channel: 'stable'
+      
+      - name: Update pubspec version
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          VERSION_NO_V=${VERSION#v}
+          sed -i "s/^version: .*/version: $VERSION_NO_V+$(date +%s)/" pubspec.yaml
+      
+      - name: Get dependencies
+        run: flutter pub get
+        
+      - name: Build APK
+        run: flutter build apk --release --split-per-abi
+        
+      - name: Create Git tag
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add pubspec.yaml
+          git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
+          git tag -a ${{ steps.version.outputs.version }} -m "Release ${{ steps.version.outputs.version }}"
+          git push origin ${{ steps.version.outputs.version }}
+          git push origin main
+        
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          files: |
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            build/app/outputs/flutter-apk/app-x86_64-release.apk
+          body: |
+            ${{ steps.version.outputs.CHANGELOG }}
+            
+            To update your app:
+            1. Download the appropriate APK for your device
+            2. Install the new version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify on Success
+        if: success()
+        run: |
+          echo "Successfully created release ${{ steps.version.outputs.version }}"
+          
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          echo "Failed to create release"
