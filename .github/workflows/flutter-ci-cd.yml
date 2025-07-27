@@ -14,15 +14,17 @@ permissions:
   actions: read
 
 jobs:
-  build-and-release:
+  version:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      changelog: ${{ steps.version.outputs.CHANGELOG }}
     steps:
       - uses: actions/checkout@v3
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 0  # Para pegar todo histórico
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-      
       - name: Generate new version
         id: version
         run: |
@@ -107,24 +109,50 @@ jobs:
           fi
           echo "EOF" >> $GITHUB_OUTPUT
 
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.32.4'
           channel: 'stable'
-      
       - name: Update pubspec version
         run: |
-          VERSION=${{ steps.version.outputs.version }}
+          VERSION=${{ needs.version.outputs.version }}
           VERSION_NO_V=${VERSION#v}
           sed -i "s/^version: .*/version: $VERSION_NO_V+$(date +%s)/" pubspec.yaml
-      
       - name: Get dependencies
         run: flutter pub get
-        
       - name: Build APK
         run: flutter build apk --release --split-per-abi
-        
+      - name: Upload APKs
+        uses: actions/upload-artifact@v3
+        with:
+          name: apks
+          path: |
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            build/app/outputs/flutter-apk/app-x86_64-release.apk
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - name: Download APKs
+        uses: actions/download-artifact@v3
+        with:
+          name: apks
+          path: build/app/outputs/flutter-apk/
       - name: Create Git tag
         run: |
           git remote set-url origin https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ github.repository }}
@@ -142,33 +170,34 @@ jobs:
           
           # Update version and commit
           git add pubspec.yaml
-          git commit -m "chore: bump version to ${{ steps.version.outputs.version }}" || echo "No changes to commit"
+          git commit -m "chore: bump version to ${{ needs.version.outputs.version }}" || echo "No changes to commit"
           
           # Create and push tag
-          git tag -a ${{ steps.version.outputs.version }} -m "Release ${{ steps.version.outputs.version }}"
-          git push origin ${{ steps.version.outputs.version }}
+          git tag -a ${{ needs.version.outputs.version }} -m "Release ${{ needs.version.outputs.version }}"
+          git push origin ${{ needs.version.outputs.version }}
           git push origin ${{ github.event.inputs.branch }}
-        
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: Release ${{ steps.version.outputs.version }}
+          tag_name: ${{ needs.version.outputs.version }}
+          name: Release ${{ needs.version.outputs.version }}
           files: |
             build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
             build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
             build/app/outputs/flutter-apk/app-x86_64-release.apk
           body: |
-            ${{ steps.version.outputs.CHANGELOG }}
-            
+            ${{ needs.version.outputs.CHANGELOG }}
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
+  notify:
+    needs: [version, build, release]
+    runs-on: ubuntu-latest
+    steps:
       - name: Notify on Success
         if: success()
         run: |
-          echo "Successfully created release ${{ steps.version.outputs.version }}"
-          
+          echo "Successfully created release ${{ needs.version.outputs.version }}"
       - name: Notify on Failure
         if: failure()
         run: |
