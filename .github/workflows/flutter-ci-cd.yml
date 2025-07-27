@@ -67,6 +67,10 @@ jobs:
           elif [ $FIX_COUNT -gt 0 ]; then
             # Patch change: mantém major e minor, incrementa patch
             PATCH=$((PATCH + FIX_COUNT))
+          else
+            # Nenhum commit específico encontrado, incrementa patch em +1
+            echo "No specific commits found, incrementing patch by 1"
+            PATCH=$((PATCH + 1))
           fi
           
           # Nova versão
@@ -91,6 +95,10 @@ jobs:
           if [ $FIX_COUNT -gt 0 ]; then
             echo "Fixes:" >> $GITHUB_OUTPUT
             echo "$COMMITS" | grep "^fix:" >> $GITHUB_OUTPUT
+          fi
+          if [ $BREAK_COUNT -eq 0 ] && [ $FEAT_COUNT -eq 0 ] && [ $FIX_COUNT -eq 0 ]; then
+            echo "Manual Release:" >> $GITHUB_OUTPUT
+            echo "- Patch version increment for release without specific commit types" >> $GITHUB_OUTPUT
           fi
           echo "EOF" >> $GITHUB_OUTPUT
 
