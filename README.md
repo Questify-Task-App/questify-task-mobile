@@ -67,7 +67,7 @@ The project uses automated semantic versioning based on commits:
 - `feat:` - Increments minor version (0.x.0)
 - `fix:` - Increments patch version (0.0.x)
 
-## 🚀 Getting Started
+## 🚀 Getting Started 
 
 1. Clone the repository
 ```bash
