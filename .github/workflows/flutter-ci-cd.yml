@@ -9,6 +9,10 @@ on:
         type: string
         default: 'master'
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
@@ -17,6 +21,7 @@ jobs:
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 0  # Para pegar todo histórico
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       
       - name: Generate new version
         id: version
@@ -122,13 +127,14 @@ jobs:
         
       - name: Create Git tag
         run: |
+          git remote set-url origin https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ github.repository }}
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add pubspec.yaml
           git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
           git tag -a ${{ steps.version.outputs.version }} -m "Release ${{ steps.version.outputs.version }}"
           git push origin ${{ steps.version.outputs.version }}
-          git push origin main
+          git push origin ${{ github.event.inputs.branch }}
         
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -146,7 +152,7 @@ jobs:
             1. Download the appropriate APK for your device
             2. Install the new version
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
       - name: Notify on Success
         if: success()
