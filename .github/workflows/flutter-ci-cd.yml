@@ -1,9 +1,13 @@
 name: Flutter CI/CD
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build and release'
+        required: true
+        type: string
+        default: 'master'
 
 jobs:
   build-and-release:
@@ -11,6 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
+          ref: ${{ github.event.inputs.branch }}
           fetch-depth: 0  # Para pegar todo histórico
       
       - name: Generate new version
