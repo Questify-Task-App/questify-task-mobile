@@ -130,8 +130,21 @@ jobs:
           git remote set-url origin https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ github.repository }}
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          
+          # Fetch latest changes
+          git fetch origin ${{ github.event.inputs.branch }}
+          
+          # Check if there are conflicts
+          if ! git merge-base --is-ancestor HEAD origin/${{ github.event.inputs.branch }}; then
+            echo "Remote has new commits, pulling latest changes..."
+            git pull origin ${{ github.event.inputs.branch }} --rebase
+          fi
+          
+          # Update version and commit
           git add pubspec.yaml
-          git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
+          git commit -m "chore: bump version to ${{ steps.version.outputs.version }}" || echo "No changes to commit"
+          
+          # Create and push tag
           git tag -a ${{ steps.version.outputs.version }} -m "Release ${{ steps.version.outputs.version }}"
           git push origin ${{ steps.version.outputs.version }}
           git push origin ${{ github.event.inputs.branch }}
@@ -147,7 +160,7 @@ jobs:
             build/app/outputs/flutter-apk/app-x86_64-release.apk
           body: |
             ${{ steps.version.outputs.CHANGELOG }}
-
+            
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
