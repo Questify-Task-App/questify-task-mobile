@@ -6,6 +6,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:questify_task_mobile/main.dart';
 
 class UpdateService {
   static const String _repoOwner = 'Questify-Task-App';
@@ -14,12 +16,12 @@ class UpdateService {
   // Check if app is running in production mode
   static bool get isProduction => const bool.fromEnvironment('dart.vm.product');
 
-  static Future<void> checkForUpdates(BuildContext context) async {
-    // Only check for updates in production mode
-    // if (!isProduction) {
-    //   debugPrint('Update check skipped: Not in production mode');
-    //   return;
-    // }
+  // Get context from global navigator key
+  static BuildContext? get _context => navigatorKey.currentContext;
+
+  static Future<void> checkForUpdates([BuildContext? context]) async {
+    final ctx = context ?? _context;
+    if (ctx == null) return;
 
     try {
       // Get current app information
@@ -55,13 +57,12 @@ class UpdateService {
             }
           }
 
-          if (downloadUrl != null && context.mounted) {
+          if (downloadUrl != null && fileName != null) {
             _showUpdateDialog(
-              context,
               latestVersion,
               releaseNotes,
               downloadUrl,
-              fileName!,
+              fileName,
             );
           }
         }
@@ -87,16 +88,18 @@ class UpdateService {
   }
 
   static void _showUpdateDialog(
-    BuildContext context,
     String version,
     String notes,
     String downloadUrl,
     String fileName,
   ) {
+    final context = _context;
+    if (context == null) return;
+
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (BuildContext context) {
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text('Update Available'),
           content: Column(
@@ -118,15 +121,14 @@ class UpdateService {
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.of(context).pop();
+                Navigator.of(dialogContext).pop();
               },
               child: const Text('Later'),
             ),
             ElevatedButton(
               onPressed: () {
-                Navigator.of(context).pop();
+                Navigator.of(dialogContext).pop();
                 _downloadAndInstallUpdate(
-                  context,
                   downloadUrl,
                   fileName,
                   version,
@@ -140,43 +142,98 @@ class UpdateService {
     );
   }
 
+  static Future<bool> _requestStoragePermission() async {
+    if (Platform.isAndroid) {
+      final deviceInfo = DeviceInfoPlugin();
+      final androidInfo = await deviceInfo.androidInfo;
+      
+      // Android 11+ (API 30+) - Use manage external storage or scoped storage
+      if (androidInfo.version.sdkInt >= 30) {
+        final manageStorageStatus = await Permission.manageExternalStorage.request();
+        if (manageStorageStatus.isGranted) {
+          return true;
+        }
+        return true; // Fallback to app's external directory
+      } 
+      // Android 10 (API 29) - Scoped storage but can still use legacy
+      else if (androidInfo.version.sdkInt >= 29) {
+        final storageStatus = await Permission.storage.request();
+        return storageStatus.isGranted;
+      }
+      // Android 9 and below - Use legacy storage permission
+      else {
+        final storageStatus = await Permission.storage.request();
+        return storageStatus.isGranted;
+      }
+    }
+    
+    return true; // iOS or other platforms
+  }
+
+  static Future<Directory?> _getDownloadDirectory() async {
+    if (Platform.isAndroid) {
+      final deviceInfo = DeviceInfoPlugin();
+      final androidInfo = await deviceInfo.androidInfo;
+      
+      // For Android 11+, prefer app's external directory to avoid permission issues
+      if (androidInfo.version.sdkInt >= 30) {
+        // Try to use public Downloads directory if we have MANAGE_EXTERNAL_STORAGE
+        if (await Permission.manageExternalStorage.isGranted) {
+          final publicDownloads = Directory('/storage/emulated/0/Download');
+          if (await publicDownloads.exists()) {
+            return publicDownloads;
+          }
+        }
+        
+        // Fallback to app's external directory (doesn't need special permission)
+        return await getExternalStorageDirectory();
+      } else {
+        // For older Android versions, use public Downloads directory
+        final publicDownloads = Directory('/storage/emulated/0/Download');
+        if (await publicDownloads.exists()) {
+          return publicDownloads;
+        }
+        return await getExternalStorageDirectory();
+      }
+    }
+    
+    return await getApplicationDocumentsDirectory();
+  }
+
   static Future<void> _downloadAndInstallUpdate(
-    BuildContext context,
     String downloadUrl,
     String fileName,
     String version,
   ) async {
-    // Request storage permission
-    final storagePermission = await Permission.storage.request();
-    if (!storagePermission.isGranted) {
-      _showErrorDialog(
-        context,
-        'Storage permission is required to download the update.',
-      );
-      return;
-    }
-
-    // Show download progress dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return const DownloadProgressDialog();
-      },
-    );
-
     try {
-      // Get downloads directory
-      Directory? downloadsDir;
-      if (Platform.isAndroid) {
-        downloadsDir = Directory('/storage/emulated/0/Download');
-        if (!await downloadsDir.exists()) {
-          downloadsDir = await getExternalStorageDirectory();
+      // Request storage permission
+      final hasPermission = await _requestStoragePermission();
+      if (!hasPermission) {
+        final context = _context;
+        if (context != null) {
+          _showPermissionDialog();
         }
-      } else {
-        downloadsDir = await getApplicationDocumentsDirectory();
+        return;
       }
 
+      final context = _context;
+      if (context == null) return;
+
+      // Show download progress dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext dialogContext) {
+          return WillPopScope(
+            onWillPop: () async => false,
+            child: const DownloadProgressDialog(),
+          );
+        },
+      );
+
+      // Get downloads directory
+      final downloadsDir = await _getDownloadDirectory();
+      
       if (downloadsDir == null) {
         throw Exception('Could not access downloads directory');
       }
@@ -191,41 +248,71 @@ class UpdateService {
         final bytes = await streamedResponse.stream.toBytes();
         await file.writeAsBytes(bytes);
 
-        // Close download dialog
-        if (context.mounted) {
-          Navigator.of(context).pop();
-        }
-
-        // Show success dialog and open installer
-        if (context.mounted) {
-          _showDownloadCompleteDialog(context, file.path, version);
+        // Close download dialog and show success
+        final successContext = _context;
+        if (successContext != null) {
+          Navigator.of(successContext).pop(); // Close progress dialog
+          _showDownloadCompleteDialog(file.path, version);
         }
       } else {
         throw Exception('Failed to download: ${streamedResponse.statusCode}');
       }
     } catch (e) {
-      // Close download dialog
-      if (context.mounted) {
-        Navigator.of(context).pop();
-      }
-
-      // Show error
-      if (context.mounted) {
-        _showErrorDialog(context, 'Failed to download update: $e');
+      // Close download dialog and show error
+      final errorContext = _context;
+      if (errorContext != null) {
+        try {
+          Navigator.of(errorContext).pop(); // Close progress dialog
+        } catch (_) {}
+        _showErrorDialog('Failed to download update: $e');
       }
 
       debugPrint('Download error: $e');
     }
   }
 
+  static void _showPermissionDialog() {
+    final context = _context;
+    if (context == null) return;
+
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Permission Required'),
+          content: const Text(
+            'Storage permission is required to download the update. Please grant permission in the app settings.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                openAppSettings();
+              },
+              child: const Text('Open Settings'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   static void _showDownloadCompleteDialog(
-    BuildContext context,
     String filePath,
     String version,
   ) {
+    final context = _context;
+    if (context == null) return;
+
     showDialog(
       context: context,
-      builder: (BuildContext context) {
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text('Download Complete'),
           content: Text(
@@ -234,25 +321,21 @@ class UpdateService {
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.of(context).pop();
+                Navigator.of(dialogContext).pop();
               },
               child: const Text('Later'),
             ),
             ElevatedButton(
               onPressed: () async {
-                Navigator.of(context).pop();
-                // Open the APK file for installation
+                Navigator.of(dialogContext).pop();
                 try {
                   final result = await OpenFilex.open(filePath);
                   debugPrint('Open file result: ${result.message}');
                 } catch (e) {
                   debugPrint('Error opening file: $e');
-                  if (context.mounted) {
-                    _showErrorDialog(
-                      context,
-                      'Could not open installer. Please install manually from Downloads folder.',
-                    );
-                  }
+                  _showErrorDialog(
+                    'Could not open installer. Please install manually from Downloads folder.',
+                  );
                 }
               },
               child: const Text('Install'),
@@ -263,17 +346,20 @@ class UpdateService {
     );
   }
 
-  static void _showErrorDialog(BuildContext context, String message) {
+  static void _showErrorDialog(String message) {
+    final context = _context;
+    if (context == null) return;
+
     showDialog(
       context: context,
-      builder: (BuildContext context) {
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text('Error'),
           content: Text(message),
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.of(context).pop();
+                Navigator.of(dialogContext).pop();
               },
               child: const Text('OK'),
             ),
@@ -283,15 +369,10 @@ class UpdateService {
     );
   }
 
-  static Widget wrapWithUpdateChecker({required Widget child}) {
-    return child;
-  }
-
-  // Method to be called after MaterialApp is ready
-  static void initializeUpdateChecker(BuildContext context) {
-    // Check for updates after build
+  // Method to be called after MaterialApp is ready (no context needed)
+  static void initializeUpdateChecker() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      checkForUpdates(context);
+      checkForUpdates();
     });
   }
 }
